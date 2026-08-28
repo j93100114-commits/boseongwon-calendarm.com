@@ -5,7 +5,7 @@
 //
 //  기존 프로젝트 `jangggimaster` 에 이미 아래 규칙이 게시되어 있고,
 //  `/{document=**}` 는 모든 컬렉션을 뜻하므로 이 앱이 쓰는 세 컬렉션
-//  (inventory_items · inventory_photos · inventory_sales) 도 이미 허용됩니다.
+//  (inventory_items · inventory_thumbs · inventory_photos · inventory_sales) 도 이미 허용됩니다.
 //  이 파일은 '지금 무엇이 걸려 있는지' 를 기록해 두려고 남깁니다.
 // ===========================================================================
 
@@ -42,6 +42,7 @@ service cloud.firestore {
 //      function signedIn() { return request.auth != null; }
 //
 //      match /inventory_items/{itemId}  { allow read, write, delete: if signedIn(); }
+//      match /inventory_thumbs/{itemId} { allow read, write, delete: if signedIn(); }
 //      match /inventory_photos/{itemId} { allow read, write, delete: if signedIn(); }
 //      match /inventory_sales/{saleId}  { allow read, write, delete: if signedIn(); }
 //
