@@ -1867,6 +1867,16 @@ function switchTab(name){
 function migLegacy(){ return state.items.filter(function(it){ return !!it.thumb; }); }
 function migMoved(){  return migLegacy().filter(function(it){ return !!state.thumbs[it.id]; }); }
 
+/** 그 제품의 사진이 **따로 담겨 있는지** 확인한다 (손에 있으면 묻지 않는다).
+ *  ⚠️ 2단계는 이것이 참일 때만 옛 자리를 비운다 — 확인 없이 지우면 사진이 사라진다. */
+function migHasThumb(it){
+    if(state.thumbs[it.id]) return Promise.resolve(true);
+    return Store.getThumb(it.id).then(function(data){
+        if(data) state.thumbs[it.id] = data;
+        return !!data;
+    }).catch(function(){ return false; });
+}
+
 function renderMig(){
     var box = document.getElementById('migBox');
     if(!box) return;
@@ -1889,7 +1899,7 @@ function renderMig(){
       + '</p>'
       + '<div style="display:flex; gap:8px; flex-wrap:wrap">'
       +   '<button class="btn btn-info" id="migStep1">1단계 📦 사진 따로 담기</button>'
-      +   '<button class="btn btn-ghost" id="migStep2"' + (moved ? '' : ' disabled') + '>2단계 🧹 옛 자리 비우기</button>'
+      +   '<button class="btn btn-ghost" id="migStep2">2단계 🧹 옛 자리 비우기</button>'
       + '</div>'
       + '<p style="font-size:13px; font-weight:600; color:var(--muted); margin:12px 0 0; line-height:1.7">'
       +   '1단계는 <b>아무것도 지우지 않습니다.</b> 옮긴 뒤 재고 목록을 한 번 훑어 사진이 잘 보이는지 확인하고,'
@@ -1905,7 +1915,7 @@ function migMove(){
     var todo = migLegacy().filter(function(it){ return !state.thumbs[it.id]; });
     if(!todo.length){ showToast('이미 다 옮겨 두었습니다. 2단계를 누르세요.', 'ok'); renderMig(); return; }
 
-    var done = 0, failed = 0, i = 0;
+    var done = 0, failed = 0, i = 0, kept = 0;
     showLoading('사진을 옮기는 중… (0/' + todo.length + ')');
 
     function step(){
@@ -1915,7 +1925,9 @@ function migMove(){
             renderList();
             showToast(failed
                 ? (num(done) + '개 옮김 · ' + num(failed) + '개 실패 (다시 눌러 보세요)')
-                : (num(done) + '개를 옮겼습니다 📦 목록에서 사진을 확인한 뒤 2단계를 누르세요'),
+                : ((done ? num(done) + '개를 옮겼습니다 📦 ' : '')
+                   + (kept ? num(kept) + '개는 이미 옮겨져 있었습니다. ' : '')
+                   + '목록에서 사진을 확인한 뒤 2단계를 누르세요'),
                 failed ? 'err' : 'ok');
             return;
         }
@@ -1923,12 +1935,18 @@ function migMove(){
         document.getElementById('loadingText').textContent =
             '사진을 옮기는 중… (' + i + '/' + todo.length + ')';
 
-        /* 원본이 있으면 원본에서 다시 만든다(화질이 좋다). 없으면 있던 작은 사진을 쓴다. */
-        var src = it.hasPhoto ? Store.getPhoto(it.id).catch(function(){ return ''; })
-                              : Promise.resolve('');
-        src.then(function(full){
-            return thumbFromDataUrl(full || it.thumb);
+        /* ⚠️ 이미 옮겨 둔 것은 건너뛴다 — 다시 눌러도 두 번 일하지 않는다
+              (앱을 껐다 켜면 옮긴 기억이 사라지므로 여기서 한 번 물어본다) */
+        migHasThumb(it).then(function(already){
+            if(already){ kept++; return null; }
+            /* 원본이 있으면 원본에서 다시 만든다(화질이 좋다). 없으면 있던 작은 사진을 쓴다. */
+            var src = it.hasPhoto ? Store.getPhoto(it.id).catch(function(){ return ''; })
+                                  : Promise.resolve('');
+            return src.then(function(full){
+                return thumbFromDataUrl(full || it.thumb);
+            });
         }).then(function(thumb){
+            if(!thumb) return;
             return Store.saveThumb(it.id, thumb).then(function(){
                 state.thumbs[it.id] = thumb;
                 done++;
@@ -1949,13 +1967,18 @@ function migMove(){
     step();
 }
 
-/** 2단계 — 옮긴 것이 확인된 제품만 옛 자리를 비운다 */
+/** 2단계 — 옛 자리를 비운다.
+ *
+ *  ⚠️ **제품 하나하나 '사진이 따로 담겨 있는지' 확인한 뒤에만 지운다**(migHasThumb).
+ *     확인 없이 지우면 그 제품만 사진이 사라지고, 원본이 없으면 되살릴 길이 없다.
+ *     확인이 안 된 것은 건드리지 않고 몇 개인지 알려 준다 — 조용히 넘어가지 말 것.
+ *  ⚠️ 1단계를 '이번에' 눌렀는지와 상관없이 된다(앱을 껐다 켜도 그대로 이어서 할 수 있다). */
 function migClean(){
-    var todo = migMoved();
-    if(!todo.length){ showToast('먼저 1단계를 눌러 사진을 옮기세요.', 'err'); return; }
-    if(!confirm(num(todo.length) + '개의 제품에서 옛 사진 자리를 비울까요? (사진은 이미 따로 담겨 있습니다)')) return;
+    var todo = migLegacy();
+    if(!todo.length){ showToast('정리할 것이 없습니다.', 'ok'); renderMig(); return; }
+    if(!confirm(num(todo.length) + '개의 제품에서 옛 사진 자리를 비울까요? (따로 담긴 사진이 확인된 것만 지웁니다)')) return;
 
-    var done = 0, failed = 0, i = 0;
+    var done = 0, failed = 0, skipped = 0, i = 0;
     showLoading('옛 자리를 비우는 중… (0/' + todo.length + ')');
 
     function step(){
@@ -1963,16 +1986,22 @@ function migClean(){
             hideLoading();
             renderMig();
             renderList();
-            showToast(failed ? (num(done) + '개 정리 · ' + num(failed) + '개 실패')
-                             : ('정리했습니다 🧹 이제 목록이 가벼워졌습니다'), failed ? 'err' : 'ok');
+            var msg = num(done) + '개를 정리했습니다 🧹';
+            if(skipped) msg += ' · ' + num(skipped) + '개는 사진을 못 찾아 그대로 두었습니다 (1단계를 먼저 누르세요)';
+            if(failed)  msg += ' · ' + num(failed) + '개 실패';
+            showToast(msg, (skipped || failed) ? 'err' : 'ok');
             return;
         }
         var it = todo[i++];
         document.getElementById('loadingText').textContent =
             '옛 자리를 비우는 중… (' + i + '/' + todo.length + ')';
-        Store.dropInlineThumb(it.id).then(function(){
-            delete it.thumb;
-            done++;
+
+        migHasThumb(it).then(function(ok){
+            if(!ok){ skipped++; return null; }        // 따로 담긴 사진이 없다 → 절대 지우지 않는다
+            return Store.dropInlineThumb(it.id).then(function(){
+                delete it.thumb;
+                done++;
+            });
         }).catch(function(e){
             failed++;
             console.warn('[재고관리] 옛 사진 자리 비우기 실패', it.id, e);
